@@ -1,0 +1,10 @@
+function fact(n) {
+	if n {
+	  return n * fact(n - 1)
+	} else {
+	return 1
+	}
+}
+function main() {
+	return fact(6)
+}
