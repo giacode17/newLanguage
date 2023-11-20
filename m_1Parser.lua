@@ -1,21 +1,28 @@
 
 local lpeg = require "lpeg"
 local pt = require "pt"
+local C, Ct, P, R, S, V = lpeg.C, lpeg.Ct, lpeg.P, lpeg.R, lpeg.S, lpeg.V
 
 ----------------------------------------------------
 local function I (msg) --l4:To show debugging msg
-  return lpeg.P(function () print(msg); return true end)
+  return P(function () print(msg); return true end)
 end
 
---||Node
-local function node (tag, ...)
-  local labels = table.pack(...)
-  local params = table.concat(labels, ", ")
-  local fields = string.gsub(params, "(%w+)", "%1 = %1")
-  local code = string.format(
-    "return function (%s) return {tag = '%s', %s} end",
-    params, tag, fields)
-  return assert(load(code))()
+--||Parser 
+
+local function node(tag, ...)
+	local labels = table.pack(...)
+
+	return function(...)
+		local params = table.pack(...)
+		local result = { tag = tag }
+
+		for i = 1, #labels do
+			result[labels[i]] = params[i]
+		end
+
+		return result
+  end
 end
 
 --
@@ -26,28 +33,53 @@ local function nodeSeq (st1, st2)
     return {tag = "seq", st1 = st1, st2 = st2}
   end
 end
+
+--[[ Node for exponential
+local function nodeExp(e1, op, e2)
+  if op == nil then
+    return e1
+  else
+    return { tag = "binop", e1 = e1, op = op, e2 = e2 }
+  end
+end--]]
+
 --|| Tokens
-local alpha = lpeg.R("AZ", "az")
-local digit = lpeg.R("09")
-local float = lpeg.C(digit^0 * lpeg.P(".") * digit^1) --jh
-local hex = lpeg.C("0" * lpeg.S("x,X") * digit^1 * lpeg.R("af")^1 * lpeg.R("AF")^1) --jh
-local alphanum = alpha + digit
+local alpha = R("AZ", "az")
+local underscore = S("_") --jh
+local digit = R("09")
+local float = C(digit^0 * P(".") * digit^1) --jh
+local hex = C("0" * S("x,X") * digit^1 * R("af")^1 * R("AF")^1) --jh
+local alphanum = alpha + digit + underscore --jh
 
-local comment = "#" * (lpeg.P(1) - "\n")^0 -- l4 :any character except the new line
+--[[
+local currentline = 1
+local currentlinepos = 1
+local newline = "\n" * P(function(_, p)
+  currentline = currentline + 1
+  currentlinepos = math.max(currentlinepos, p)
+  return true
+end)
+]]
+
+
 local maxmatch = 0  --l4 for the time capture
+local maxCL = 0
 
-local space = lpeg.V"space"
-local unary = lpeg.S("+-")^-1 --jh
+local comment = "#" * (P(1) - "\n")^0 -- l4 :any character except the new line
+local commnetBlock = P("#{") * (newline + P(1) - "#}") ^ 0 * P("#}")
+local space = V"space"
+
+local unary = S("+-")^-1 --jh
 local numeral = ( unary * ( hex + float + (digit^1)) ) / tonumber / node("number", "val")  * space--jh
 
-local reserved = {"return", "if", "else", "while", "new", "function", "var"}
-local excluded = lpeg.P(false)
+local reserved = {"@", "return", "if", "else", "while", "new", "function", "var"}
+local excluded = P(false)
 for i = 1, #reserved do
   excluded = excluded + reserved[i]
 end
 excluded = excluded * -alphanum
 
-local ID = lpeg.V"ID" --l7: def of ID move to inside of Grammar   
+local ID = V"ID" --l7: def of ID move to inside of Grammar   
 local var = ID / node("variable", "var")
 
 --l4: to control space following codetoken such as ret, semicolon...
@@ -62,17 +94,29 @@ local function Rw (t)
 end
 
 --||Operator
-local opA = lpeg.C(lpeg.S"+-") * space
-local opM = lpeg.C(lpeg.S"*/%") * space --jh  %,*,/ same priority
-local opE = lpeg.C(lpeg.S"^") *space --jh the highst priority
+local opA = C(S"+-") * space
+local opM = C(S"*/%") * space --jh  %,*,/ same priority
+local opE = C(S"^") * space --jh the highst priority
+local opC = C((S"<>")* P("=")^-1 + "==" +"!=") * space --jh
+local opL = C(P("and") + P("or")) * space --jh
+local opN = P("!") * space --jh
+
 
 
 -- Convert a list {n1, "+", n2, "+", n3, ...} into a tree
 -- {...{ op = "+", e1 = {op = "+", e1 = n1, n2 = n2}, e2 = n3}...}
-local function foldBin (lst)  --For the opr tree
+local function foldBin (lst)  --For the Binary opr tree
   local tree = lst[1]
   for i = 2, #lst, 2 do
     tree = { tag = "binop", e1 = tree, op = lst[i], e2 = lst[i + 1] }
+  end
+  return tree
+end
+
+local function foldLogical(lst)
+  local tree = lst[1]
+  for i = 2, #lst, 2 do
+    tree = { tag = "logicalop", e1 = tree, op = lst[i], e2 = lst[i + 1] }
   end
   return tree
 end
@@ -86,28 +130,29 @@ local function foldIndex (lst) --lhs list
 end
 
 --||Variable for grammar
-local lhs = lpeg.V"lhs"
-local call = lpeg.V"call"
-local power = lpeg.V"power"
-local factor = lpeg.V"factor"
-local term = lpeg.V"term"
-local exp = lpeg.V"exp"
-local stat = lpeg.V"stat"
-local stats = lpeg.V"stats"
-local block = lpeg.V"block"
-local funcDec = lpeg.V"funcDec" --function declaration
-local args = lpeg.V"args"
-local params = lpeg.V"params"
+local lhs = V"lhs"
+local call = V"call"
+local factor = V"factor"
+local term1 = V"term1"
+local term2 = V"term2"
+local term3 = V"term3"
+local exp = V"exp"
+local stat = V"stat"
+local stats = V"stats"
+local block = V"block"
+local funcDec = V"funcDec" --function declaration
+local args = V"args"
+local params = V"params"
 
---||Grammar
-grammar = lpeg.P{"prog",
+--||Table for Grammar 
+grammar = P{"prog",
   --l7: multiple (1 more) function declaration make Ct
-  prog = space * lpeg.Ct(funcDec^1) * -1, 
+  prog = space * Ct(funcDec^1) * -1, 
 
   funcDec = Rw"function" * ID * T"(" * params * T")" * block
               / node("function", "name", "params", "body"),--l7: put the inside node 
 
-  params = lpeg.Ct((ID * (T"," * ID)^0)^-1),--^-1: optional
+  params = Ct((ID * (T"," * ID)^0)^-1),--^-1: optional
   
   stats = stat * (T";" * stats)^-1 / nodeSeq,
 
@@ -116,58 +161,80 @@ grammar = lpeg.P{"prog",
   stat = block
       --l8: var: local valriable name = init val of local var./put node: local, name,init
        + Rw"var" * ID * T"=" * exp / node("local", "name", "init") 
-       + Rw"if" * exp * block * (Rw"else" * block)^-1
+       + Rw"if" * exp * block * (Rw"else" * block)^-1 --if st
            / node("if1", "cond", "th", "el")
-       + Rw"while" * exp * block / node("while1", "cond", "body")
+       + Rw"while" * exp * block / node("while1", "cond", "body") --while st
        + call --l7: funcion call
-       + lhs * T"=" * exp / node("assgn", "lhs", "exp")
-       + Rw"return" * exp / node("ret", "exp"),
+       + lhs * T"=" * exp / node("assgn", "lhs", "exp") --assign st
+       + Rw"return" * exp / node("ret", "exp") --return st
+       + Rw"@" * exp / node("ptst", "exp"),   --printst
 
-  lhs = lpeg.Ct(var * (T"[" * exp * T"]")^0) / foldIndex,
+  lhs = Ct(var * (T"[" * exp * T"]")^0) / foldIndex,
 
   call = ID * T"(" * args * T")" / node("call", "fname", "args"), --for args
 
-  args = lpeg.Ct((exp * (T"," * exp)^0)^-1),
+  args = Ct((exp * (T"," * exp)^0)^-1),
 
   factor = Rw"new" * T"[" * exp * T"]" / node("new", "size")
          + numeral
          + T"(" * exp * T")"
-         + call
+         + call 
          + lhs,
-  
-  power = lpeg.Ct(factor * (opE * factor)^0) / foldBin, --jh
-  term = lpeg.Ct(power * (opM * power)^0) / foldBin, --jh
-         
-  --term = lpeg.Ct(factor * (opM * factor)^0) / foldBin,
-
-  exp = lpeg.Ct(term * (opA * term)^0) / foldBin,
-
-  space = (lpeg.S(" \t\n") + comment)^0
-            * lpeg.P(function (_,p)
-                       maxmatch = math.max(maxmatch, p);
-                       return true
-                     end),
-
-  ID = (lpeg.C(alpha * alphanum^0) - excluded) * space
-   
+  exp = term3,
+  term3 = Ct(term2 * (opA * term2)^0) / foldBin,
+  term2 = Ct(term1 * (opM * term1)^0) / foldBin, --jh
+  term1 = Ct(factor * (opE * factor)^0) / foldBin, --jh
+  space = (S(" \t\n") + comment + commnetBlock)^0
+            * P(function (_,pos)
+                  maxmatch = math.max(maxmatch, pos);
+                  maxCL = newline + 1
+                  return true
+                end),
+  ID = (C(alpha * alphanum^0) - excluded) * space
+     
 }
 
 
-local function syntaxError (input, max)
-  io.stderr:write("syntax error\n")
-  io.stderr:write(string.sub(input, max - 10, max - 1),
-        "|", string.sub(input, max, max + 11), "\n")
+local function syntaxError (input, maxPos, maxLine)
+  io.stderr:write("syntax error: Line " ..maxLine.. "\n")
+  io.stderr:write(string.sub(input, maxPos - 10, maxPos - 1),
+        "|", string.sub(input, maxPos, maxPos + 11), "\n")
 end
 
 --||Parser
 local function parse (input)
   local res = grammar:match(input)
   if (not res) then
-    syntaxError(input, maxmatch)
+    syntaxError(input, maxmatch, maxCL)
     os.exit(1)
   end
   return res
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 --Compiler------------------------------------------
 local Compiler = { funcs = {}, vars = {}, nvars = 0, locals = {} }
@@ -176,10 +243,12 @@ function Compiler:addCode (op)
   local code = self.code
   code[#code + 1] = op
 end
---Operator Instruction
+--Operator Instruction for compiler
 local ops = {["+"] = "add", ["-"] = "sub",
-             ["*"] = "mul", ["/"] = "div", ["%"] = "mod", ["^"] = "expn" }--["^"] = "expn"
-
+             ["*"] = "mul", ["/"] = "div", ["%"] = "mod", ["^"] = "expn",
+             ["<"] = "les", [">"] = "grt", ["<="] = "eqles", [">="] = "eqgrt",
+             ["=="] ="eql", ["!="] ="neql"}
+             
 function Compiler:var2num (id)
   local num = self.vars[id]
   if not num then
@@ -244,7 +313,6 @@ function Compiler:codeCall (ast)
   self:addCode(func.code) --func called recursively so set the argument which func was called 
 end
 
-
 function Compiler:codeExp (ast)
   if ast.tag == "number" then
     self:addCode("push")
@@ -308,7 +376,6 @@ function Compiler:codeBlock (ast)
   end 
 end
 
-
 function Compiler:codeStat (ast)
   if ast.tag == "assgn" then
     self:codeAssgn(ast)
@@ -328,6 +395,9 @@ function Compiler:codeStat (ast)
     self:codeExp(ast.exp)
     self:addCode("ret")
     self:addCode(#self.locals + #self.params)--l8:local var
+  elseif ast.tag == "ptst" then
+    self:codeExp(state, ast.exp)
+    self:addCode(state, "print")
   elseif ast.tag == "while1" then
     local ilabel = self:currentPosition()
     self:codeExp(ast.cond)
@@ -380,7 +450,7 @@ local function compile (ast)
 end
 
 ----------------------------------------------------
---Implement call opcode
+--Implement call opcode, mem: memory
 local function run (code, mem, stack, top)
   local pc = 1 --program counter
   local base = top --loc var = base +1
@@ -398,7 +468,7 @@ local function run (code, mem, stack, top)
 --l7: this run call each function recursively
 --code: func code, mem: global mem, top: argus    
     elseif code[pc] == "call" then
-      pc = pc + 1
+      pc = pc + 1 --goes to the next instruction 
       local code = code[pc]
       top = run(code, mem, stack, top)
     elseif code[pc] == "pop" then
@@ -425,7 +495,29 @@ local function run (code, mem, stack, top)
       top = top - 1
     elseif code[pc] == "expn" then --jh
       stack[top - 1] = stack[top - 1] ^ stack[top]
-      top = top - 1 
+      top = top - 1
+    elseif code[pc] == "les" then
+      stack[top - 1] = stack[top - 1] < stack[top] and 1 or 0
+      top = top - 1
+    elseif code[pc] == "grt" then
+      stack[top - 1] = stack[top - 1] > stack[top] and 1 or 0
+      top = top - 1    
+    elseif code[pc] == "eqles" then
+      stack[top - 1] = stack[top - 1] <= stack[top] and 1 or 0
+      top = top - 1
+    elseif code[pc] == "eqgrt" then
+      stack[top - 1] = stack[top - 1] >= stack[top] and 1 or 0
+      top = top - 1   
+    elseif code[pc] == "eql" then
+      stack[top - 1] = stack[top - 1] == stack[top] and 1 or 0
+      top = top - 1
+    elseif code[pc] == "neql" then
+      stack[top - 1] = stack[top - 1] ~= stack[top] and 1 or 0
+      top = top - 1
+    
+    elseif code[pc] == "not" then ------
+      stack[top] = stack[top] == 0 and 1 or 0  
+
     elseif code[pc] == "loadL" then --loc var
       pc = pc + 1
       local n = code[pc]
@@ -436,7 +528,7 @@ local function run (code, mem, stack, top)
       local n = code[pc]
       stack[base + n] = stack[top]
       top = top - 1
-    elseif code[pc] == "load" then
+    elseif code[pc] == "load" then --global var 
       pc = pc + 1
       local id = code[pc]
       top = top + 1
@@ -445,6 +537,9 @@ local function run (code, mem, stack, top)
       pc = pc + 1
       local id = code[pc]
       mem[id] = stack[top]
+      top = top - 1
+    elseif code[pc] == "print" then
+      print(stack[top])
       top = top - 1
     elseif code[pc] == "newarray" then
       local size = stack[top]

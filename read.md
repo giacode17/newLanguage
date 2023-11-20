@@ -1,12 +1,10 @@
 # Final Project Report: [Project Name_Imfine]
 
 ## Language Syntax
-
-Imfine is a Final Project for BAPL course, this project follows the syntax defined by Roberto during the course.
+  This new language 'Imfine' is a Final Project for BAPL course, this project follows the syntax defined by Roberto during the course. https://classpert.com/classpertx/courses/building-a-programming-language/cohort
 
 ## New Features/Changes
 
-In this section, describe the new features or changes that you have added to the programming language. This should include:
 
 * Detailed explanation of each feature/change
 1. Operator: unary minus operator, +, -, *, /, %, ^ :considered priority :file_arith_operator
