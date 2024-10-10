@@ -25,5 +25,5 @@
 
 ## References
 
-List any references used in the development of your language besides this courses, including any books, papers, or online resources.
+
 
